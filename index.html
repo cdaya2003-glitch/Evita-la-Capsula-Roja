@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MNEMOS Labs: Fleeting Memory Collector</title>
+    <!-- Carga de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Estilo para asegurar el 100% del viewport */
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Estilos para el fondo de la aplicación */
+        #app {
+            background-image: url('https://wallpapers.com/images/hd/4k-ultra-hd-dark-swirls-s15rvka3px64w9nj.jpg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+
+        /* El canvas ocupa todo el espacio */
+        #memoryCanvas {
+            display: block;
+            cursor: crosshair;
+        }
+
+        /* Ocultar elementos por defecto */
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body class=""> 
+    <!-- Contenedor principal de la aplicación, pantalla completa -->
+    <div id="app" class="relative w-screen h-screen">
+
+        <!-- Overlay de la interfaz de usuario (Score y Título) -->
+        <div class="absolute inset-0 z-10 pointer-events-none p-6 md:p-10 flex flex-col justify-between">
+            
+            <!-- Título y Score -->
+            <header class="text-white">
+                <h1 class="text-4xl md:text-6xl font-extrabold tracking-tight text-indigo-400">
+                    MNEMOS <span class="text-gray-400 font-light">Labs</span>
+                </h1>
+                <p class="text-base md:text-lg text-gray-500 mt-1">Recuerdos Fugaces</p>
+            </header>
+            
+            <!-- Contenedor para agrupar y mover el footer -->
+            <div class="flex flex-col items-end mb-10 md:mb-16">
+                <footer class="text-white text-right flex justify-end items-end gap-4">
+                    <!-- Botón de Finalizar ELIMINADO -->
+    
+                    <div class="bg-black/50 backdrop-blur-sm p-3 rounded-xl shadow-lg inline-block">
+                        <p class="text-xl md:text-3xl font-semibold text-gray-300 uppercase">
+                            Recuerdos Recolectados: 
+                            <span id="scoreDisplay" class="text-5xl md:text-6xl font-extrabold text-teal-400 ml-3">0</span>
+                        </p>
+                    </div>
+                </footer>
+                
+                <!-- Texto de ayuda -->
+                <p class="text-sm text-gray-500 mt-2 text-right">Haz clic o toca para capturar el recuerdo antes de que se desvanezca.</p>
+            </div>
+
+        </div>
+
+        <!-- Mensaje de Carga/Inicio -->
+        <div id="messageBox" class="absolute inset-0 bg-black/80 flex items-center justify-center pointer-events-auto z-20">
+            <div class="bg-gray-800 p-8 rounded-xl shadow-2xl max-w-sm text-center">
+                <h2 class="text-4xl font-bold text-teal-400 mb-4">Inicia la Recolectión</h2>
+                <p class="text-gray-300 mb-6 text-lg">En este mundo distópico, los recuerdos se desvanecen rápidamente. Captura las luces azules. <br><br> <span class="font-bold text-red-400">Evita las cápsulas rojas.</span></p>
+                <button id="startButton" class="px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-500 transition shadow-md shadow-indigo-500/50 text-lg">
+                    Comenzar
+                </button>
+            </div>
+        </div>
+
+        <!-- Canvas para el sistema de partículas -->
+        <canvas id="memoryCanvas"></canvas>
+    </div>
+
+    <script>
+        // --- Constantes y Variables Globales ---
+        const canvas = document.getElementById('memoryCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const messageBox = document.getElementById('messageBox');
+        
+        // Elementos de UI
+        const startButton = document.getElementById('startButton');
+
+        let memories = [];
+        let score = 0;
+        let animationFrameId;
+        let isGameRunning = false;
+        
+        // NUEVO: Variables para controlar las cápsulas rojas
+        const POISON_CHANCE = 0.05; // 5% de probabilidad
+        const POISON_START_SCORE = 5; // Solo aparecen después de 5 puntos
+
+        const CAPSULE_WIDTH = 40; 
+        const CAPSULE_HEIGHT = 60;
+        const FADE_RATE = 0.005; 
+        const SPAWN_INTERVAL = 300; 
+        let lastSpawnTime = 0;
+
+        // --- Clase para la Partícula de Memoria ---
+        class Memory {
+            constructor(x, y, isPoison = false) {
+                this.x = x;
+                this.y = y;
+                this.opacity = 1.0;
+                this.id = Date.now() + Math.random();
+                this.isPoison = isPoison;
+                
+                this.color = isPoison ? '255, 20, 20' : '20, 255, 255'; // Rojo si es 'poison', si no cian
+            }
+
+            update() {
+                // MODIFICADO: La cápsula roja no se desvanece
+                if (!this.isPoison) {
+                    this.opacity -= FADE_RATE;
+                }
+                this.x += (Math.random() - 0.5) * 0.5; 
+                this.y += (Math.random() - 0.5) * 0.5; 
+            }
+
+            // FUNCIÓN DE DIBUJO CORREGIDA (Compatible con todos los navegadores)
+            draw() {
+                const w = CAPSULE_WIDTH;
+                const h = CAPSULE_HEIGHT;
+                const x = this.x - w / 2;
+                const y = this.y - h / 2;
+                const r = w / 2; 
+
+                // 1. Efecto de Brillo (Glow)
+                const glowPadding = 10;
+                const glowW = w + glowPadding;
+                const glowH = h + glowPadding;
+                const glowX = this.x - glowW / 2;
+                const glowY = this.y - glowH / 2;
+                const glowR = glowW / 2;
+
+                ctx.beginPath();
+                // Reemplazo de roundRect por dibujo manual para compatibilidad
+                this.drawRoundedPath(ctx, glowX, glowY, glowW, glowH, glowR);
+                ctx.fillStyle = `rgba(${this.color}, ${this.opacity * 0.1})`; 
+                ctx.shadowColor = `rgba(${this.color}, ${this.opacity})`;
+                ctx.shadowBlur = 15;
+                ctx.fill();
+                
+                // 2. Núcleo de la cápsula (sólida)
+                ctx.beginPath();
+                this.drawRoundedPath(ctx, x, y, w, h, r);
+                ctx.fillStyle = `rgba(${this.color}, ${this.opacity})`;
+                ctx.shadowBlur = 0; 
+                ctx.fill();
+            }
+
+            // Helper para dibujar rectángulos redondeados manualmente
+            drawRoundedPath(ctx, x, y, w, h, r) {
+                ctx.moveTo(x + r, y);
+                ctx.arcTo(x + w, y, x + w, y + h, r);
+                ctx.arcTo(x + w, y + h, x, y + h, r);
+                ctx.arcTo(x, y + h, x, y, r);
+                ctx.arcTo(x, y, x + w, y, r);
+                ctx.closePath();
+            }
+        }
+
+        // --- Funciones de Utilidad ---
+
+        /**
+         * Ajusta el tamaño del canvas al viewport.
+         */
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        /**
+         * Spawnea una nueva memoria. Puede ser azul o roja.
+         */
+        function spawnMemory() {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height;
+            
+            // Determina si es 'poison'
+            let isPoison = false;
+            if (score > POISON_START_SCORE) {
+                isPoison = Math.random() < POISON_CHANCE;
+            }
+            
+            memories.push(new Memory(x, y, isPoison));
+        }
+        
+        /**
+         * Maneja la interacción (click/tap) para recolectar la memoria.
+         */
+        function handleInteraction(clientX, clientY) {
+            if (!isGameRunning) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = clientX - rect.left;
+            const mouseY = clientY - rect.top;
+            
+            for (let i = memories.length - 1; i >= 0; i--) {
+                const mem = memories[i];
+
+                const hitWidth = CAPSULE_WIDTH * 1.5;
+                const hitHeight = CAPSULE_HEIGHT * 1.5;
+                const x1 = mem.x - hitWidth / 2;
+                const x2 = mem.x + hitWidth / 2;
+                const y1 = mem.y - hitHeight / 2;
+                const y2 = mem.y + hitHeight / 2;
+
+                if (mouseX > x1 && mouseX < x2 && mouseY > y1 && mouseY < y2) {
+                    
+                    if (mem.isPoison) {
+                        endGame(); // Finaliza el juego
+                    } else {
+                        // Es una cápsula azul normal
+                        score++;
+                        scoreDisplay.textContent = score;
+                        memories.splice(i, 1);
+                    }
+                    break; // Salir del bucle una vez que se ha tocado una cápsula
+                }
+            }
+        }
+
+        // --- Bucle Principal del Juego ---
+
+        /**
+         * El bucle de animación principal (Game Loop).
+         */
+        function animate(currentTime) {
+            if (!isGameRunning) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Spawnea cápsulas
+            if (currentTime - lastSpawnTime > SPAWN_INTERVAL) {
+                spawnMemory();
+                lastSpawnTime = currentTime;
+            }
+            
+            // Actualiza y dibuja todas las cápsulas
+            for (let i = memories.length - 1; i >= 0; i--) {
+                const mem = memories[i];
+                mem.update();
+                mem.draw();
+
+                // Elimina solo las cápsulas azules que se desvanecen
+                if (mem.opacity <= 0 && !mem.isPoison) {
+                    memories.splice(i, 1);
+                }
+            }
+
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        // --- Inicialización y Event Listeners ---
+        
+        /**
+         * Finaliza el juego y vuelve al menú principal.
+         */
+        function endGame() {
+            if (!isGameRunning) return; 
+
+            isGameRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            
+            messageBox.style.display = 'flex'; // Muestra el menú de inicio
+
+            memories = []; // Limpia las cápsulas
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Limpia la pantalla
+        }
+
+        /**
+         * Inicia el juego.
+         */
+        function startGame() {
+            if (isGameRunning) return; 
+            
+            messageBox.style.display = 'none';
+            isGameRunning = true;
+            score = 0;
+            scoreDisplay.textContent = score;
+            memories = [];
+            lastSpawnTime = 0;
+            
+            resizeCanvas();
+            animationFrameId = requestAnimationFrame(animate); 
+        }
+
+        // Listener para redimensionar el canvas con la ventana
+        window.addEventListener('resize', resizeCanvas);
+        
+        // Listeners para la interacción del usuario (click/tap)
+        canvas.addEventListener('mousedown', (e) => handleInteraction(e.clientX, e.clientY));
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); 
+            if (e.touches.length > 0) {
+                handleInteraction(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        // Listeners de botones de la UI
+        startButton.addEventListener('click', startGame);
+
+        // Inicializa el tamaño del canvas al cargar
+        resizeCanvas();
+
+        // Muestra el mensaje de inicio
+        messageBox.style.display = 'flex';
+
+    </script></body>
+</html>
